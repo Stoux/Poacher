@@ -1,0 +1,254 @@
+
+main {
+    # Setup
+    parseArgs
+        - which folder
+        - which config folder
+        - should only tail files (instead of completely scanning the existing files)
+    getConfig
+        - contains whitelist
+        - contains saved bannable patterns
+        - contains default folder (if folder is not passed through args)
+        - contains AbuseIPDB credentials
+    checkForAccessToFolder
+        -> no access | !Panic
+
+    #
+    # Start worker threads
+    #
+
+    $processingRef = start thread Processing {
+        data {
+            knownSites[]
+            ipToData {
+                lines{Line,IP,ThreatLevel,Timestamp,& Site}[]
+                currentTotalThreatLevel (threat over last hour)
+                totalThreatMeter (total threat caused all day)
+            }
+            siteToLines
+            siteToCallsPerSecond
+            ipsWithThreatLevel[]
+        }
+
+        load whitelist for threat level
+        load common attack patterns for threat level
+
+        loop {
+            $r = listenToIncomingThreads {
+                if $r == newDataFromFiles {
+                    parse file data to data structures, loop through lines {
+                        parse line
+                        add line to siteToLines
+                        add line indicator (time) to siteToCallPerSeonc
+
+                        $threatLevel = determine threat level {
+                            check IP on whitelist {
+                                return 0 threat if whitelist
+                            }
+
+                            check common attack patterns {
+                                increate threat if matches
+                            }
+
+                            check time between previous requests {
+                                increase threat level if a lot requets
+                                increase threat level if duplicate requests
+                                increase threat level if multiple 404's
+                            }
+                        }
+
+                        insert line on lines (of ipToData) on correct position (based on timestamp)
+                        if $threatLevel > 0 {
+                            add IP to ipsWithThreatLevel
+                            increase currentTotalThreatLevel on IP
+                            increate totalThreatMeter on IP
+                        }
+                    }
+                }
+
+                if $r == requestSite {
+                    get site from siteToLines reference
+                    send to requester thread
+                }
+
+                if $r == getSiteOverview {
+                    $cpsData = calculate requests per 1s, 5s, 30s, 1m for each site
+                    send $cpsData to requester thread
+                }
+
+                if $r == getIpOverview {
+                    send line data from ipToLine to requester thread
+                }
+
+                if $r == getThreadIps {
+                    send ips with their current thread level
+                }
+
+                if $r == getKnownSites {
+                    send list of known sites
+                }
+
+                if $r == killSignal {
+                    stop thread;
+                }
+            }
+
+            # Check if a data cleanup should happen
+            if timePassed > 10s { # 10s might be more?
+
+                check all IPs with threat level {
+                    $ipThreat = recalculate threat level
+                    if $ipThreat == 0 {
+                        remove ip from threat level
+                    }
+                    save currentThreatLevel in ipToData
+                }
+
+                Loop through sites in siteToCallsPerSecond {
+                    check for keys (timestamps) that are old than 1m { # or max $cpsData used in UI
+                        delete that keys + associated data to clear memory
+                    }
+                }
+
+            }
+        }
+    }
+
+
+    $handlerRef = start thread fileHandling {
+        # see https://github.com/tdbgamer/Tail/blob/master/src/main.rs
+        (
+            pass folder to monitor,
+            pass communication channel to $parentThread,
+            pass communication channel to $processingRef,
+            pass $onlyTail files,
+        )
+
+        let mut watcher = Inotify::new()
+
+        find files in folder, loop {
+            check if name is *.log, exclude *.error.log
+            add file to watcher, watch for FILE_MODIFY {
+                # If failed to add watcher
+                report to $parentThread: failed to watch, !panic
+                stop thread;
+            }
+        }
+
+        # This should be blocking till the parent thread accepts it
+        report to $parentThread: readyToListen
+
+        loop {
+            $r = listen to incoming request from $parentThread { # non-blocking | continue loop if no request
+                if $r == killSignal {
+                    remove all files from watcher
+                    stop thread;
+                }
+            }
+
+            check for events from watcher, loop through them {
+                $lines = read new lines from file
+                send lines & site to $processingRef
+            }
+        }
+    }
+
+    wait for all OK from $handlerRef {
+        # if panic from $handlerRef
+        echo error
+        send kill signal to $processingRef
+        stop !panic;
+    }
+
+    create TUI {
+        (
+            pass $processingRef, # for requests & killing
+            pass $handlerRef, # for killing the thread
+        )
+
+        $screenStack = []
+
+        loop {
+            $currentData = $screenStack[ lastIndex ]
+            $currentScreen = $currentData.screen
+
+            screen {
+                if $currentScreen == 'home' {
+                    if ! paused {
+                        $ Request getSiteOverview from $processingRef
+                        $ Request getThreatIps from $processingRef
+                    }
+
+                    # Show table with site overview {
+                        # Site, Requests/1s, R/10s, R/30s, R
+                    }
+
+                    # Show X (= available lines) IPs with top threat levels of last hour {
+                        # IP, Threat Level
+                    }
+
+                    # Support 'LEFT'/'RIGHT' key to switch between
+                    # Support 'UP'/'DOWN' in each list
+
+                    # Support Mouse Click to select site/IP
+                    # Support 'ENTER' to select site/IP in each respective list
+
+                    # Support 'P' to stop updating the rows
+                    # Support 'Pause' button in TUI (with mousce click)
+
+                    # Support 'G' key, see 'Graph' mouse click button.
+                    # Support 'Graph' button (with mouse click) {
+                        add to screen stack 'screenGraph'
+                    }
+
+                }
+
+                if $currentScreen == 'screenGraph' {
+                    # TODO: Graph with total request / s
+                    # TODO: Graph with most active sites?
+                }
+
+
+                if $currentScreen == 'help' {
+                    # TODO
+                }
+
+                if $currentScreen == 'site' {
+                    # Request getSite from $processingRef
+
+                    # Tab 1: Show scrollable log file of site
+                    # Tab 2: Show graph with requests / second
+
+                    # Support 'UP'/'DOWN' key in log file list (should stop auto scrolling)
+                    # Support 'PageUP'/'PageDOWN' key in log file list (should stop auto scrolling) {
+                        Resume auto scrolling when bottom is hit
+                    }
+                    # Support 'ENTER' key in log file list (when a line is selected) {
+                        ## See mouse click on log record
+                    }
+                    # Support mouse click on log record {
+                        $currentScreen = 'IP'
+                        $currentIp = get ip from clicked line
+                    }
+                    # Support TAB for switching between graph & logs
+                }
+
+                if $currentScreen == 'IP' {
+                    # TODO: Log of all requests made by that user per site
+                    # TODO: Lines of threat level
+                    # TODO: Button to ban IP
+                    # TODO: Button to check AbuseIPDB
+                }
+
+            }
+
+
+            # Always support 'Q' key -> close app & threads
+            # Always support 'H' key -> go to 'help' screen
+            # Always support 'RETURN' key -> pop screen of $screenStack (if $screenStack.lenght > 1)
+        }
+
+    }
+
+}
+

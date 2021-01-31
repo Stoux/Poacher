@@ -17,4 +17,4 @@ Planned features are:
 - Automatic detection of bad-actors in the logs (i.e. attacks, high request rate, etc)
 - Ability to lookup an IP on AbuseIPDB
 
-See process.txt for a psuedo-code / text version of the intended logic & parts.
+See [process.txt](process.txt) for a psuedo-code / text version of the intended logic & parts.

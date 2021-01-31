@@ -3,12 +3,14 @@ extern crate clap;
 use clap::{Arg, App};
 use self::clap::ArgMatches;
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use termion::color;
 use std::fs;
 use regex::Regex;
 
 use crate::common::fatal_error;
+use std::fs::canonicalize;
+use std::io::Error;
 
 
 pub const ARG_PATHS: &str = "paths";
@@ -107,7 +109,7 @@ pub fn validate_paths(args: &ArgMatches) -> Vec<String> {
                             notified_error_logs = true;
                         }
                     } else {
-                        log_files.push(inner_file.path().to_str().unwrap().to_owned());
+                        log_files = add_to_files(log_files, inner_file.path().to_str().unwrap().to_owned());
                     }
                 } else {
                     eprintln!("{}Skipping {} that does not match .log pattern{}", c_yellow, inner_file.path().to_str().unwrap(), c_reset);
@@ -122,8 +124,10 @@ pub fn validate_paths(args: &ArgMatches) -> Vec<String> {
                 }
             };
 
+
+
             // Add the file to the list of files to track
-            log_files.push(file_arg.to_owned());
+            log_files = add_to_files(log_files, file_arg.to_owned());
         } else {
             // TODO: Fatal?
         }
@@ -134,3 +138,15 @@ pub fn validate_paths(args: &ArgMatches) -> Vec<String> {
     return log_files;
 }
 
+fn add_to_files(mut files: Vec<String>, file: String) -> Vec<String> {
+    // Resolve the path to an absolute path
+    let path = Path::new(&file);
+    let absolute_path = match canonicalize(path) {
+        Ok(absolute_path) => absolute_path.to_str().unwrap().to_owned(),
+        Err(error) => fatal_error(&format!("Failed to resolve file {} to absolute path: {}", &file, error)),
+    };
+
+    files.push(absolute_path);
+
+    return files;
+}

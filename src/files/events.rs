@@ -10,8 +10,8 @@ pub enum ToMainEvent {
 }
 
 pub struct FileLines {
-    filename: String,
-    lines: Vec<String>,
+    pub filename: String,
+    pub lines: Vec<String>,
 }
 
 /// Events send by the FilesProcessor

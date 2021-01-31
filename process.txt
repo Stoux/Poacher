@@ -80,8 +80,8 @@ main {
                     send line data from ipToLine to requester thread
                 }
 
-                if $r == getThreadIps {
-                    send ips with their current thread level
+                if $r == getThreatIps {
+                    send ips with their current threat level
                 }
 
                 if $r == getKnownSites {
